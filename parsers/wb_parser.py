@@ -48,7 +48,7 @@ class WBParser(BaseParser):
 
                 try:
                     await page.goto(url, wait_until='networkidle')
-                    await page.wait_for_selector('.product-card__wrapper', timeout=10000)
+                    await page.wait_for_selector('.product-card__wrapper', timeout=30000)
 
                     # Скроллим для подгрузки lazy-load товаров
                     for _ in range(3):
