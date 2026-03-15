@@ -1,31 +1,33 @@
 import asyncio
+import random
 import re
-from typing import List
-from playwright.async_api import async_playwright, Browser, Page
+from typing import List, Optional
 from pydantic import BaseModel, Field
 from loguru import logger
+from playwright.async_api import async_playwright
 from .base_parser import BaseParser
-
+from playwright_stealth import stealth
 
 class WBItem(BaseModel):
     name: str = Field(default='', description='Название товара')
     brand: str = Field(default='', description='Бренд')
     price: str = Field(default='', description='Цена')
-    old_price: str = Field(default='', description='Старая цена (со скидкой)')
-    rating: str = Field(default='', description='Рейтинг')
-    reviews: str = Field(default='', description='Количество отзывов')
+    old_price: str = Field(default='', description='Старая цена')
+    rating: float = Field(default=0.0, description='Рейтинг')
+    reviews: int = Field(default=0, description='Количество отзывов')
     link: str = Field(default='', description='Ссылка на товар')
     article: str = Field(default='', description='Артикул')
 
 
 class WBParser(BaseParser):
-    """Парсер Wildberries через Playwright (для динамических страниц)"""
+    """Парсер Wildberries с гарантированным перехватом API"""
 
     def __init__(self, config, search_query: str, max_pages: int = 2, headless: bool = True):
         super().__init__(config)
         self.search_query = search_query
         self.max_pages = max_pages
         self.headless = headless
+        self.api_response = None
 
     def parse(self) -> List[WBItem]:
         logger.info(f"Запуск Wildberries: '{self.search_query}', страниц: {self.max_pages}")
@@ -35,85 +37,61 @@ class WBParser(BaseParser):
     async def _async_parse(self):
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=self.headless)
-            context = await browser.new_context(
-                user_agent=self.ua.random,
-                viewport={'width': 1920, 'height': 1080},
-                locale='ru-RU'
-            )
-            page = await context.new_page()
+            page = await browser.new_page()
+            await stealth(page)
 
             for page_num in range(1, self.max_pages + 1):
                 url = f"https://www.wildberries.ru/catalog/0/search.aspx?page={page_num}&search={self.search_query.replace(' ', '%20')}"
                 logger.info(f"Загрузка страницы {page_num}")
 
+                # Очищаем предыдущий ответ
+                self.api_response = None
+
+                # Перехватываем нужный API-запрос
+                async def handle_route(route):
+                    if "/__internal/u-recom/personal/ru/common/v8/search" in route.request.url:
+                        logger.debug(f"Перехвачен API запрос: {route.request.url}")
+                        # Ждём реальный ответ от сервера
+                        response = await route.fetch()
+                        self.api_response = response
+                        await route.fulfill(response=response)
+                    else:
+                        await route.continue_()
+
+                await page.route("**/*", handle_route)
+
+                # Переходим на страницу и ждём загрузки
+                await page.goto(url, wait_until="networkidle")
+
+                # Даём дополнительное время на выполнение JavaScript
+                await page.wait_for_timeout(5000)
+
                 try:
-                    await page.goto(url, wait_until='networkidle')
-                    await page.wait_for_selector('.product-card__wrapper', timeout=30000)
+                    data = await self.api_response.json()
+                    products = data.get("data", {}).get("products", [])
+                    logger.info(f"Страница {page_num}: получено {len(products)} товаров")
 
-                    # Скроллим для подгрузки lazy-load товаров
-                    for _ in range(3):
-                        await page.evaluate('window.scrollBy(0, 1000)')
-                        await asyncio.sleep(1)
-
-                    # Собираем карточки
-                    cards = await page.query_selector_all('.product-card__wrapper')
-                    logger.info(f"Найдено карточек: {len(cards)}")
-
-                    for card in cards:
-                        try:
-                            item = WBItem()
-
-                            # Название и бренд
-                            brand_name = await card.query_selector('.product-card__brand-name')
-                            if brand_name:
-                                text = await brand_name.inner_text()
-                                parts = text.split('/')
-                                if len(parts) >= 2:
-                                    item.brand = parts[0].strip()
-                                    item.name = parts[1].strip()
-                                else:
-                                    item.name = text
-
-                            # Цена
-                            price = await card.query_selector('.price__lower-price')
-                            if price:
-                                item.price = await price.inner_text()
-
-                            # Старая цена
-                            old_price = await card.query_selector('.price__old-price')
-                            if old_price:
-                                item.old_price = await old_price.inner_text()
-
-                            # Рейтинг
-                            rating = await card.query_selector('.product-card__rating')
-                            if rating:
-                                item.rating = await rating.inner_text()
-
-                            # Ссылка и артикул
-                            link_elem = await card.query_selector('.product-card__link')
-                            if link_elem:
-                                href = await link_elem.get_attribute('href')
-                                if href:
-                                    item.link = f'https://www.wildberries.ru{href}'
-                                    match = re.search(r'/(\d+)/', href)
-                                    if match:
-                                        item.article = match.group(1)
-
-                            self.results.append(item)
-
-                        except Exception as e:
-                            logger.warning(f"Ошибка парсинга карточки: {e}")
-                            continue
-
-                    await self._random_delay_async(3, 6)
+                    for p in products:
+                        item = WBItem()
+                        item.name = p.get("name", "")
+                        item.brand = p.get("brand", "")
+                        price_info = p.get("sizes", [{}])[0].get("price", {})
+                        item.price = str(price_info.get("product", ""))
+                        item.old_price = str(price_info.get("total", ""))
+                        item.rating = p.get("rating", 0.0)
+                        item.reviews = p.get("feedbacks", 0)
+                        item.link = f"https://www.wildberries.ru/catalog/{p.get('id', '')}/detail.aspx"
+                        item.article = str(p.get("id", ""))
+                        self.results.append(item)
 
                 except Exception as e:
-                    logger.error(f"Ошибка на странице {page_num}: {e}")
+                    logger.error(f"Ошибка парсинга JSON: {e}")
+
+                await self._random_delay_async(3, 6)
 
             await browser.close()
 
     async def _random_delay_async(self, min_delay: float, max_delay: float):
-        import random, asyncio
         delay = random.uniform(min_delay, max_delay)
         logger.debug(f"Задержка {delay:.2f} сек")
         await asyncio.sleep(delay)

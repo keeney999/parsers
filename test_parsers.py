@@ -12,6 +12,7 @@ from parsers.gis_parser import GisParser
 from parsers.hh_parser import HHParser
 from parsers.tg_parser import TGParser
 from parsers.yandex_parser import YandexParser
+from parsers.ozon_parser import OzonParser
 
 
 def test_avito():
@@ -21,10 +22,17 @@ def test_avito():
     parser.save_results("avito_test", format="csv")
     logger.success(f"Avito: {len(items)} объявлений")
 
+def test_ozon():
+    logger.info("=== Тест Ozon ===")
+    parser = OzonParser(settings, search_query="кроссовки", max_pages=1)
+    parser.parse()
+    parser.save_results("ozon_test", format="json")
+    logger.success("Ozon тест завершён")
+
 
 def test_wildberries():
     logger.info("=== Тест Wildberries ===")
-    parser = WBParser(settings, search_query="кроссовки", max_pages=1, headless=True)
+    parser = WBParser(settings, search_query="кроссовки", max_pages=1)
     parser.parse()
     parser.save_results("wb_test", format="json")
     logger.success("Wildberries тест завершён")
@@ -32,7 +40,7 @@ def test_wildberries():
 
 def test_gis():
     logger.info("=== Тест 2ГИС (API) ===")
-    parser = GisParser(settings, city="Новосибирск", category="автосервис", max_pages=1, mode="api")
+    parser = GisParser(settings, city="Новосибирск", category="автосервис", max_pages=1, mode="hybrid")
     items = parser.parse()
     parser.save_results("gis_api_test", format="excel")
     logger.success(f"2ГИС API: {len(items)} организаций")
@@ -50,7 +58,7 @@ def test_yandex():
     logger.info("=== Тест Яндекс.Карты ===")
     parser = YandexParser(settings, search_query="автосервис", city="москва", max_pages=1)
     items = parser.parse()
-    parser.save_results("yandex_test", format="excel")
+    parser.save_results("yandex_test", format="csv")
     logger.success(f"Яндекс: {len(items)} организаций")
 
 
@@ -70,11 +78,7 @@ if __name__ == "__main__":
     logger.info("ЗАПУСК ТЕСТИРОВАНИЯ ВСЕХ ПАРСЕРОВ")
     logger.info("=" * 50)
 
-    test_avito()
+    test_ozon()
     test_wildberries()
-    test_gis()
-    test_hh()
-    test_yandex()
-    test_telegram()
 
     logger.success("Все тесты выполнены. Результаты в папке results/")

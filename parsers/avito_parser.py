@@ -52,9 +52,9 @@ class AvitoParser(BaseParser):
     def _parse_page(self, html: str) -> List[AvitoItem]:
         soup = BeautifulSoup(html, 'lxml')
         items = []
-
-        # Селекторы Avito (могут меняться, но на 2026 год актуальны)
+        # Основной контейнер объявления
         cards = soup.find_all('div', {'data-marker': 'item'})
+        logger.info(f"Найдено карточек: {len(cards)}")
 
         for card in cards:
             try:
@@ -66,31 +66,43 @@ class AvitoParser(BaseParser):
                     item.title = title_tag.text.strip()
                     item.link = 'https://www.avito.ru' + title_tag.get('href', '')
 
-                # Цена
-                price_tag = card.find('meta', {'itemprop': 'price'})
+                # Цена (работает твой старый селектор)
+                price_tag = card.find('span', {'data-marker': 'item-price-value'})
                 if price_tag:
-                    item.price = price_tag.get('content', '')
+                    item.price = price_tag.text.strip()
                 else:
-                    price_tag = card.find('span', {'class': 'price-price'})
+                    # запасной вариант
+                    price_tag = card.find('meta', {'itemprop': 'price'})
                     if price_tag:
-                        item.price = price_tag.text.strip()
+                        item.price = price_tag.get('content', '')
 
-                # Адрес
-                address_tag = card.find('span', {'class': 'address'})
+                # Адрес (проверено 14.03.2026)
+                address_tag = card.find('span', {'class': 'styles-module-root-geBqs'})
+                if not address_tag:
+                    address_tag = card.find('span', {'class': 'address'})
                 if address_tag:
                     item.address = address_tag.text.strip()
 
-                # Дата
+                # Дата публикации
                 date_tag = card.find('div', {'data-marker': 'item-date'})
                 if date_tag:
                     item.date = date_tag.text.strip()
+                else:
+                    date_tag = card.find('span', {'class': 'styles-module-root-TWbQI'})
+                    if date_tag:
+                        item.date = date_tag.text.strip()
 
-                # Продавец
+                # Имя продавца
                 seller_tag = card.find('a', {'data-marker': 'seller-link'})
                 if seller_tag:
                     item.seller_name = seller_tag.text.strip()
+                    # Рейтинг может быть рядом
+                    rating_tag = card.find('span', {'class': 'styles-module-rating-lqS6x'})
+                    if rating_tag:
+                        item.seller_rating = rating_tag.text.strip()
 
                 items.append(item)
+
             except Exception as e:
                 logger.warning(f"Ошибка парсинга карточки: {e}")
                 continue
