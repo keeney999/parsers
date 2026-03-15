@@ -6,7 +6,6 @@ from pydantic import BaseModel, Field
 from loguru import logger
 from playwright.async_api import async_playwright
 from .base_parser import BaseParser
-from playwright_stealth import stealth
 
 class WBItem(BaseModel):
     name: str = Field(default='', description='Название товара')
@@ -38,7 +37,12 @@ class WBParser(BaseParser):
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=self.headless)
             page = await browser.new_page()
-            await stealth(page)
+            await page.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+            Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
+            Object.defineProperty(navigator, 'languages', {get: () => ['ru-RU', 'ru']});
+            Object.defineProperty(navigator, 'platform', {get: () => 'Win32'});
+            """)
 
             for page_num in range(1, self.max_pages + 1):
                 url = f"https://www.wildberries.ru/catalog/0/search.aspx?page={page_num}&search={self.search_query.replace(' ', '%20')}"
